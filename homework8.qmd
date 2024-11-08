@@ -9,7 +9,7 @@ This homework will explore basics of predictive modeling using an online-availab
 
 First, let's get our libraries set:
 
-```{r}
+```{r, echo = FALSE}
 library(tidymodels)
 library(lubridate)
 library(dplyr)
@@ -161,3 +161,105 @@ nrow(test)
 ```
 
 Everything appears to be in order with our test and training sets, and we have stratified by Season as requested. Next up, we'll make three recipes, train our three MLR models, and then compare their performances:
+
+```{r}
+# All three of our recipes will use the same recipes. However, model 1 will only include all variables as predictors, while models 2 and 3 will include more complex terms.
+
+# Recipe 1: all numeric variables, no interactions
+bike_rec1 = recipe(TotBikes ~., data = clean_data) |>
+  step_date(Date, features = "dow") |>
+  step_mutate(DayType = factor(if_else(wday(Date) %in% c(1,7), "Weekend", "Weekday"), levels = c("Weekend","Weekday"))) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_dummy(Season, Holiday, DayType) |>
+  step_rm(Date_dow, Date) #|>
+  #prep(training = clean_data) |>
+  #bake(clean_data) # let's make sure it worked as planned!
+
+# Recipe 2: all numeric variables, some interactions
+bike_rec2 = recipe(TotBikes ~., data = clean_data) |>
+  step_date(Date, features = "dow") |>
+  step_mutate(DayType = factor(if_else(wday(Date) %in% c(1,7), "Weekend", "Weekday"), levels = c("Weekend","Weekday"))) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_dummy(Season, Holiday, DayType) |>
+  step_rm(Date_dow, Date) |>
+  step_interact(~ Season_Spring:Holiday_No.Holiday +
+                  Season_Summer:Holiday_No.Holiday +
+                  Season_Winter:Holiday_No.Holiday +
+                  Season_Spring:TotRain + Season_Summer:TotRain +
+                  Season_Winter:TotRain + 
+                  MeanTemp:TotRain)
+
+# Recipe 3: all numeric variables, some interacitons, & quad term
+bike_rec3 = recipe(TotBikes ~., data = clean_data) |>
+  step_date(Date, features = "dow") |>
+  step_mutate(DayType = factor(if_else(wday(Date) %in% c(1,7), "Weekend", "Weekday"), levels = c("Weekend","Weekday"))) |>
+  step_normalize(all_numeric_predictors()) |>
+  step_dummy(Season, Holiday, DayType) |>
+  step_rm(Date_dow, Date) |>
+  step_interact(~ Season_Spring:Holiday_No.Holiday +
+                  Season_Summer:Holiday_No.Holiday +
+                  Season_Winter:Holiday_No.Holiday +
+                  Season_Spring:TotRain + Season_Summer:TotRain +
+                  Season_Winter:TotRain + 
+                  MeanTemp:TotRain) |>
+  step_poly(TotRain, TotSnow, MeanTemp, MeanHumid, MeanWindSpeed,
+            MeanVis, MeanDewPoint , MeanSolar, degree = 2)
+```
+
+After prepping and baking the data, we can see that everything seems to be in order! Now, we can declare our model and set up our workflow:
+
+```{r}
+bike_mod = linear_reg() %>%
+  set_engine("lm")
+
+bike_wfl1 = workflow() |>
+  add_recipe(bike_rec1) |>
+  add_model(bike_mod)
+             
+bike_wfl2 = workflow() |>
+  add_recipe(bike_rec2) |>
+  add_model(bike_mod)
+
+bike_wfl3 = workflow() |>
+  add_recipe(bike_rec3) |>
+  add_model(bike_mod)
+```
+
+Cool, now we have the workflows for each of our models ready to! Let's set up the 10-fold cross validation next:
+
+```{r}
+bike_cv10 = vfold_cv(clean_data, 10) # same CV for all models
+
+bike_cv_fits1 = bike_wfl1 |>
+  fit_resamples(bike_cv10)
+bike_cv_fits1 |>
+  collect_metrics()
+
+bike_cv_fits2 = bike_wfl2 |>
+  fit_resamples(bike_cv10)
+bike_cv_fits2 |>
+  collect_metrics()
+
+bike_cv_fits3 = bike_wfl3 |>
+  fit_resamples(bike_cv10)
+bike_cv_fits3 |>
+  collect_metrics()
+```
+
+After fitting all three models, we see that the first one has the lowest RMSE. Also, this first model is the simplest of the set! We will use recipe 1 on the full training set and then use collect_metrics() to find the test RMSE:
+
+```{r}
+final_mod = last_fit(bike_wfl1, split = splits)
+clean_final_mod = collect_metrics(final_mod)
+clean_final_mod
+```
+
+And finally, we can obtain the final model coefficient table:
+
+```{r}
+final_fits = extract_fit_parsnip(final_mod)
+final_coef = tidy(final_fits)
+final_coef
+```
+
+And there we have it! We can see how the various different parameters are expected to impact bike rentals in this specific town, and could use these to predict how well our bikes may fair depending on the weather, season, and other variables.
