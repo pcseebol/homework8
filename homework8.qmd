@@ -1,0 +1,163 @@
+---
+title: "Homework8"
+author: "Patrick Seebold"
+format: pdf
+editor: visual
+---
+
+This homework will explore basics of predictive modeling using an online-available data set concerning bike data in Seoul, South Korea.
+
+First, let's get our libraries set:
+
+```{r}
+library(tidymodels)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+```
+
+## EDA
+
+Next, let's load the data in and resolve the known error mentioned in the instructions. We can specify the fileEncoding and avoid checking names to solve the problem:
+
+```{r}
+data = read.csv("SeoulBikeData.csv", fileEncoding = "Latin1", check.names = F)
+```
+
+Great, now we can go ahead with our EDA to make sure everything looks good. First, lets check for missing values:
+
+```{r}
+sum(is.na(data))
+```
+
+Sweet, no missing values. makes for a good start. Next, we'll take a look at the column types, rename to avoid strange variable names, and change our categorical variables to factors. The instructions say to change our variable names later in the process, but I'd rather they be in a clean format for the rest of the EDA!
+
+```{r}
+summary(data)
+colnames(data) = c('Date', 'NumBikes', "Hour", "Temperature", "Humidity",
+                   "WindSpeed","Visibility", "DewPointTemp", "SolarRad", "Rainfall"
+                   , "Snowfall", "Season", "Holiday", "FunctioningDay" )
+
+data$Season = as.factor(data$Season)
+data$Holiday = as.factor(data$Holiday)
+data$FunctioningDay = as.factor(data$FunctioningDay)
+levels(data$Season)
+levels(data$Holiday)
+levels(data$FunctioningDay)
+```
+
+Great, now we can see that everything looks good with our numerical variables, our variable names are no longer likely to cause an issue, and our categorical variables are appropriately recast as factors! Next, we will change the date into a workable arithmetic form using lubridate:
+
+```{r}
+typeof(data$Date) # currently character
+
+data$Date = lubridate::dmy(data$Date)
+typeof(data$Date) # now it's a double!
+```
+
+Now that we have cleaned the data up, we will do some summary stats, specifically looking at bike rental count, rainfall, and snowfall. We'll also examine these across some categorical variables, such as FunctioningDay, Holiday, and Season:
+
+```{r}
+data |> # check bike numbers by season
+  group_by(FunctioningDay) |>
+  summarize(mean = mean(NumBikes), sd = sd(NumBikes))# Non-functioning days mean no bikes!
+
+sum(data$FunctioningDay == "No") # 295 of the data points can be excluded
+
+sub_data = subset(data, data$FunctioningDay == "Yes") # we can ignore days that are not functioning
+
+
+sub_data |> # check bike numbers by season
+  group_by(Season) |>
+  summarize(mean = mean(NumBikes), sd = sd(NumBikes))
+
+sub_data |> # check bike numbers by holiday
+  group_by(Holiday) |>
+  summarize(mean = mean(NumBikes), sd = sd(NumBikes))
+
+sub_data |> # check rain  by season
+  group_by(Season) |>
+  summarize(mean = mean(Rainfall),  sd = sd(Rainfall))
+
+sub_data |> # check snowfall by season
+  group_by(Season) |>
+  summarize(mean = mean(Snowfall),  sd = sd(Snowfall))
+```
+
+We see that summer appears to have the highest number of bike rentals, and winter has the fewest. Bike rentals are more common on Non-Holidays, so they are likely being used to commute to work. Finally, we see from our tables that snowfall is most plentiful in winter, while rainfall is most plentiful in summer.
+
+Next up, let's summarize across hours so that we can collapse each day into a single observation.
+
+```{r}
+clean_data = sub_data |>
+  group_by(Date, Season, Holiday) |>
+  summarize(TotBikes = sum(NumBikes), TotRain = sum(Rainfall), TotSnow = sum(Snowfall), MeanTemp = mean(Temperature), MeanHumid = mean(Humidity), MeanWindSpeed = mean(WindSpeed), MeanVis = mean(Visibility), MeanDewPoint = mean(DewPointTemp), MeanSolar = mean(SolarRad))
+head(clean_data)
+  
+```
+
+Great, now we have our final data set for training. Let's recreate our basic summaries and do some plots on this cleaned data. We'll also report some correlations. Let's first recreate our summary stats:
+
+```{r}
+
+clean_data |> # check bike numbers by season
+  group_by(Season) |>
+  summarize(mean = mean(TotBikes), sd = sd(TotBikes))
+
+clean_data |> # check bike numbers by holiday
+  group_by(Holiday) |>
+  summarize(mean = mean(TotBikes), sd = sd(TotBikes))
+
+clean_data |> # check rain  by season
+  group_by(Season) |>
+  summarize(mean = mean(TotRain),  sd = sd(TotRain))
+
+clean_data |> # check snowfall by season
+  group_by(Season) |>
+  summarize(mean = mean(TotSnow),  sd = sd(TotSnow))
+```
+
+We see that the same trends hold; more bikes in summer, more bikes on non-holidays, more rain in summer, and more snow in winter. Next, let's plot some of the numerical variables:
+
+```{r}
+ggplot(clean_data, aes(x = TotRain, y = TotBikes)) +
+       geom_point() +
+       labs(x = 'Total Rain', y = 'Total Bikes', title = 'Bike Rentals by Amount of rain')
+
+ggplot(clean_data, aes(x = TotSnow, y = TotBikes)) +
+       geom_point() +
+       labs(x = 'Total Snow', y = 'Total Bikes', title = 'Bike Rentals by Amount of snow')
+
+ggplot(clean_data, aes(x = MeanTemp, y = TotBikes)) +
+       geom_point() +
+       geom_smooth() +
+       labs(x = 'Mean Temperature', y = 'Total Bikes', title = 'Bike Rentals by Temperature')
+```
+
+These plots make sense. We see a lot more bike rentals when there is low snow and low rain. Also, we see that the number of bikes increase as temperature increases, until a certain point. These plots appear to be accurately capturing info about how weather influence bike riding behavior!
+
+Finally, let's plot some correlations:
+
+```{r}
+cor(clean_data[sapply(clean_data, is.numeric)])
+```
+
+We can see some impressive correlations here. For example, Mean Temp, Mean Dew Point, and Mean Solar are all quite positively correlated with total number of bike rentals. These are likely all tied into the weather we commented on above - when the weather is nice, people are more likely to rent bikes, thus leading to higher correlation values! We should be able to do some nice prediction on this data given the strengths of these correlations, although we might be at risk of overfitting if we aren't careful.
+
+## Modeling the Data
+
+Now we can prep our model for prediction! First, let's make our test and training sets:
+
+```{r}
+set.seed(42)
+splits = initial_split(clean_data, prop = 0.75, strata = "Season")
+train = training(splits)
+test = testing(splits)
+
+head(train)
+nrow(train)
+head(test)
+nrow(test)
+```
+
+Everything appears to be in order with our test and training sets, and we have stratified by Season as requested. Next up, we'll make three recipes, train our three MLR models, and then compare their performances:
